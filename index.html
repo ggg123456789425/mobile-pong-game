@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Pong (Mobile Friendly)</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --accent: #2ee6a7;
+      --text: #dbeee4;
+    }
+    html,body {
+      height: 100%;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(ellipse at center, #081021 0%, var(--bg) 60%);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+    }
+    .wrap {
+      width: 100%;
+      max-width: 880px;
+      padding: 14px;
+      box-sizing: border-box;
+      border-radius: 12px;
+    }
+    header {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    header h1 { margin:0; font-size:18px; color:var(--text); }
+    canvas {
+      display:block;
+      width:100%;
+      height:auto;
+      border-radius:10px;
+      touch-action: none;
+    }
+    footer {
+      margin-top:8px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      font-size:13px;
+      color:#9fb0c0;
+    }
+    .hint { font-size:13px; }
+    .controls { font-size:12px; color:#7f95a6; }
+    @media (max-width:420px){
+      header h1{ font-size:16px; }
+      .controls{ font-size:11px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Simple Pong（支持触控）</h1>
+      <div class="controls">触摸左侧控制板子，或用 ↑ / ↓ 键</div>
+    </header>
+
+    <canvas id="game" width="800" height="500" tabindex="0" aria-label="Pong game"></canvas>
+
+    <footer>
+      <div class="hint">左：你（触控/鼠标/键盘）。右：电脑。</div>
+      <div class="controls">点击画布开始 / 空格暂停 / R 重开</div>
+    </footer>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const LOG_W = 800;
+    const LOG_H = 500;
+    const PADDLE_W = 12, PADDLE_H = 110, BALL_R = 8;
+    const PLAYER_X = 12, MAX_SCORE = 10;
+    const CPU_X = LOG_W - PADDLE_W - 12;
+    const MAX_BOUNCE_ANGLE = 75 * Math.PI / 180;
+    const INITIAL_BALL_SPEED = 5;
+    const BALL_ACCEL = 0.25;
+
+    let player = { x: PLAYER_X, y: (LOG_H - PADDLE_H) / 2, width: PADDLE_W, height: PADDLE_H };
+    let cpu = { x: CPU_X, y: (LOG_H - PADDLE_H) / 2, width: PADDLE_W, height: PADDLE_H };
+    let ball = { x: LOG_W/2, y: LOG_H/2, vx: INITIAL_BALL_SPEED, vy: 0, speed: INITIAL_BALL_SPEED, radius: BALL_R };
+    let score = { player: 0, cpu: 0 };
+    let running = false, paused = false, waitingToServe = false;
+    let keys = { ArrowUp:false, ArrowDown:false };
+
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+    function resetBall(towardPlayer=false){
+      ball.x = LOG_W/2; ball.y = LOG_H/2; ball.speed = INITIAL_BALL_SPEED;
+      const angle = (Math.random()*0.6 - 0.3);
+      const dir = towardPlayer ? -1 : 1;
+      ball.vx = dir * ball.speed * Math.cos(angle);
+      ball.vy = ball.speed * Math.sin(angle);
+      waitingToServe = true;
+      setTimeout(()=> waitingToServe = false, 600);
+    }
+
+    function startGame(){
+      score.player = 0; score.cpu = 0;
+      player.y = (LOG_H - PADDLE_H)/2;
+      cpu.y = (LOG_H - PADDLE_H)/2;
+      resetBall(false);
+      running = true; paused = false;
+    }
+
+    function resizeCanvas() {
+      const DPR = window.devicePixelRatio || 1;
+      const cssWidth = Math.min(window.innerWidth - 28, 880);
+      const scale = cssWidth / LOG_W;
+      canvas.style.width = cssWidth + 'px';
+      canvas.style.height = (LOG_H * scale) + 'px';
+      canvas.width = Math.max(1, Math.floor(LOG_W * DPR * scale));
+      canvas.height = Math.max(1, Math.floor(LOG_H * DPR * scale));
+      ctx.setTransform(DPR * scale, 0, 0, DPR * scale, 0, 0);
+      draw();
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    canvas.addEventListener('mousemove', (e)=>{
+      const rect = canvas.getBoundingClientRect();
+      const mouseY = e.clientY - rect.top;
+      const cssH = rect.height;
+      player.y = clamp((mouseY / cssH) * LOG_H - player.height/2, 0, LOG_H - player.height);
+    });
+
+    function handleTouchMove(e){
+      if (!e.touches || e.touches.length===0) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const t = e.touches[0];
+      const x = t.clientX - rect.left;
+      const y = t.clientY - rect.top;
+      if (x <= rect.width / 2) {
+        player.y = clamp((y / rect.height) * LOG_H - player.height/2, 0, LOG_H - player.height);
+      } else {
+        if (!running) startGame();
+        else if (paused) paused = false;
+      }
+    }
+    canvas.addEventListener('touchstart', handleTouchMove, {passive:false});
+    canvas.addEventListener('touchmove', handleTouchMove, {passive:false});
+
+    canvas.addEventListener('click', ()=>{
+      canvas.focus();
+      if (!running) startGame();
+      else if (paused) paused = false;
+    });
+
+    window.addEventListener('keydown', (e)=>{
+      if (e.code === 'Space'){ paused = !paused; e.preventDefault(); return; }
+      if (e.code === 'KeyR'){ startGame(); return; }
+      if (e.code === 'ArrowUp' || e.code === 'ArrowDown') keys[e.code] = true;
+    });
+    window.addEventListener('keyup', (e)=>{
+      if (e.code === 'ArrowUp' || e.code === 'ArrowDown') keys[e.code] = false;
+    });
+
+    function update(){
+      if (!running || paused || waitingToServe) return;
+
+      const keySpeed = 6;
+      if (keys.ArrowUp) player.y -= keySpeed;
+      if (keys.ArrowDown) player.y += keySpeed;
+      player.y = clamp(player.y, 0, LOG_H - player.height);
+
+      const cpuCenter = cpu.y + cpu.height/2;
+      const target = ball.y;
+      const cpuSpeed = 4 + Math.min(2, (ball.speed - INITIAL_BALL_SPEED)*0.25);
+      const diff = target - cpuCenter;
+      if (Math.abs(diff) > 6) cpu.y += clamp(diff, -cpuSpeed, cpuSpeed);
+      cpu.y = clamp(cpu.y, 0, LOG_H - cpu.height);
+
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      if (ball.y - ball.radius <= 0) { ball.y = ball.radius; ball.vy = -ball.vy; }
+      if (ball.y + ball.radius >= LOG_H) { ball.y = LOG_H - ball.radius; ball.vy = -ball.vy; }
+
+      if (ball.x - ball.radius <= player.x + player.width) {
+        if (ball.y >= player.y && ball.y <= player.y + player.height) {
+          ball.x = player.x + player.width + ball.radius;
+          paddleBounce(player, -1);
+        }
+      }
+      if (ball.x + ball.radius >= cpu.x) {
+        if (ball.y >= cpu.y && ball.y <= cpu.y + cpu.height) {
+          ball.x = cpu.x - ball.radius;
+          paddleBounce(cpu, 1);
+        }
+      }
+
+      if (ball.x < -50) {
+        score.cpu++;
+        if (score.cpu >= MAX_SCORE) running = false;
+        resetBall(true);
+      } else if (ball.x > LOG_W + 50) {
+        score.player++;
+        if (score.player >= MAX_SCORE) running = false;
+        resetBall(false);
+      }
+    }
+
+    function paddleBounce(paddle, dir){
+      const paddleCenter = paddle.y + paddle.height / 2;
+      const relativeY = (ball.y - paddleCenter);
+      const normalized = relativeY / (paddle.height / 2);
+      const angle = normalized * MAX_BOUNCE_ANGLE;
+      ball.speed = Math.min(14, ball.speed + BALL_ACCEL);
+      ball.vx = dir * ball.speed * Math.cos(angle);
+      ball.vy = ball.speed * Math.sin(angle);
+    }
+
+    function roundedRectPath(x,y,w,h,r){
+      ctx.beginPath();
+      ctx.moveTo(x+r,y);
+      ctx.arcTo(x+w,y,x+w,y+h,r);
+      ctx.arcTo(x+w,y+h,x,y+h,r);
+      ctx.arcTo(x,y+h,x,y,r);
+      ctx.arcTo(x,y,x+w,y,r);
+      ctx.closePath();
+    }
+
+    function roundRectFill(x,y,w,h,r){
+      roundedRectPath(x,y,w,h,r);
+      ctx.fill();
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,LOG_W,LOG_H);
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      roundRectFill(0,0,LOG_W,LOG_H,8);
+      ctx.fillStyle = '#2ee6a7';
+      const dashH = 16, gap = 10;
+      for (let y=20; y<LOG_H-20; y += dashH + gap) ctx.fillRect(LOG_W/2 - 1, y, 2, dashH);
+
+      ctx.fillStyle = '#9fead0';
+      roundedRectPath(player.x, player.y, player.width, player.height, 6);
+      ctx.fill();
+      roundedRectPath(cpu.x, cpu.y, cpu.width, cpu.height, 6);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.fillStyle = '#fff';
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = '#cfeee0';
+      ctx.font = '48px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(score.player, LOG_W*0.25, 12);
+      ctx.fillText(score.cpu, LOG_W*0.75, 12);
+
+      if (!running) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(LOG_W/2 - 220, LOG_H/2 - 46, 440, 92);
+        ctx.fillStyle = '#2ee6a7';
+        ctx.font = '28px system-ui, Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const winner = score.player > score.cpu ? '你赢了！' : (score.cpu > score.player ? '电脑赢了！' : '游戏准备好了');
+        ctx.fillText(winner, LOG_W/2, LOG_H/2 - 10);
+        ctx.fillStyle = '#b7dcd0';
+        ctx.font = '16px system-ui, Arial';
+        ctx.fillText('点击画布或按 R 开始', LOG_W/2, LOG_H/2 + 22);
+      } else if (paused) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(LOG_W/2 - 180, LOG_H/2 - 34, 360, 68);
+        ctx.fillStyle = '#ffc';
+        ctx.font = '24px system-ui, Arial';
+        ctx.fillText('已暂停 — 按 空格 继续', LOG_W/2, LOG_H/2);
+      } else if (waitingToServe) {
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.fillRect(LOG_W/2 - 140, LOG_H/2 - 24, 280, 48);
+        ctx.fillStyle = '#e6fff3';
+        ctx.font = '18px system-ui, Arial';
+        ctx.fillText('准备中...', LOG_W/2, LOG_H/2);
+      }
+    }
+
+    let last = performance.now();
+    function loop(now){
+      const dt = now - last;
+      last = now;
+      update(dt/1000);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    running = false; paused = false; waitingToServe = true;
+    ball.x = LOG_W/2; ball.y = LOG_H/2;
+    draw();
+
+    canvas.setAttribute('role','application');
+    resizeCanvas();
+
+    let lastTap = 0;
+    canvas.addEventListener('touchend', (e)=>{
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        if (!running) startGame();
+        else paused = !paused;
+      }
+      lastTap = now;
+    }, {passive:true});
+  </script>
+</body>
+</html>
